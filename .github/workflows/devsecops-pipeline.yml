@@ -1,0 +1,87 @@
+name: DevSecOps Pipeline
+
+# Trigger the pipeline on push or pull request to the main branch
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  # --- 1. SECRET SCANNING ---
+  # Checks if a developer accidentally committed passwords or API keys
+  secret-scanning:
+    name: Scan for Hardcoded Secrets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Gitleaks needs the full commit history to scan properly
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # --- 2. SAST (CodeQL) & SCA (Safety) ---
+  # SAST: Static code analysis (finds bad security practices in Python using GitHub CodeQL)
+  # SCA: Software Composition Analysis (finds vulnerabilities in dependencies using Safety)
+  code-security:
+    name: Code & Dependency Security
+    runs-on: ubuntu-latest
+    needs: secret-scanning # This job only runs if no secrets were found
+    permissions:
+      actions: read
+      contents: read
+      security-events: write # Required for CodeQL to upload SARIF results to GitHub
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # -- Setup Python & SCA --
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies and Safety (SCA)
+        run: |
+          pip install -r requirements.txt
+          pip install safety
+
+      - name: Run Safety (SCA)
+        # Checks if any library in requirements.txt has known CVEs
+        run: safety check -r requirements.txt 
+
+      # -- CodeQL SAST --
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+
+  # --- 3. CONTAINER SECURITY ---
+  # Builds the Docker image and scans it for OS-level vulnerabilities
+  container-security:
+    name: Docker Build & Trivy Scan
+    runs-on: ubuntu-latest
+    needs: code-security # This job only runs if the Python code and dependencies are secure
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Build Docker Image
+        run: docker build -t my-secure-api:latest .
+
+      - name: Run Trivy Vulnerability Scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'my-secure-api:latest'
+          format: 'table'
+          exit-code: '1' # Fails the pipeline if vulnerabilities are found
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH' # Only blocks on critical or high vulnerabilities
