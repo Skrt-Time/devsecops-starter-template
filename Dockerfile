@@ -1,5 +1,5 @@
 # 1. Use a lightweight base image to reduce the attack surface
-FROM python:3.10-slim
+FROM python:3.12-slim
 
 # 2. Prevent running the application as 'root' for security reasons
 # Create a non-root system user named 'appuser'
